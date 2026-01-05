@@ -57,7 +57,7 @@ class ImageFXDownloader:
             imagefx_url = "https://aitestkitchen.withgoogle.com/tools/image-fx"
             print(f"\n🌐 ImageFX 페이지로 이동: {imagefx_url}")
             self.driver.get(imagefx_url)
-            time.sleep(3)  # 페이지 로딩 대기
+            time.sleep(5)  # 페이지 로딩 대기 (증가)
             print("✅ ImageFX 페이지 로드 완료")
             return True
         except Exception as e:
@@ -79,11 +79,15 @@ class ImageFXDownloader:
             ]
 
             input_element = None
+            selected_selector = None
+
+            # 먼저 클릭 가능한 요소 찾기
             for selector in selectors:
                 try:
-                    input_element = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    input_element = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
                     )
+                    selected_selector = selector
                     print(f"✅ 입력창 찾음 (선택자: {selector})")
                     break
                 except TimeoutException:
@@ -98,19 +102,55 @@ class ImageFXDownloader:
                 input("   4. Enter를 눌러 계속하세요...")
                 return True
 
-            # 입력창 클릭 및 프롬프트 입력
-            input_element.click()
-            time.sleep(0.5)
-            input_element.clear()
-            input_element.send_keys(prompt)
+            # 요소를 뷰포트에 스크롤
+            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", input_element)
             time.sleep(1)
 
-            print("✅ 프롬프트 입력 완료")
-            return True
+            # 입력 시도 (여러 방법 시도)
+            try:
+                # 방법 1: 일반 클릭 및 입력
+                input_element.click()
+                time.sleep(0.5)
+                input_element.clear()
+                input_element.send_keys(prompt)
+                print("✅ 프롬프트 입력 완료 (방법 1: send_keys)")
+                time.sleep(1)
+                return True
+
+            except Exception as e1:
+                print(f"⚠️ 방법 1 실패, JavaScript로 재시도: {e1}")
+
+                try:
+                    # 방법 2: JavaScript로 값 설정
+                    self.driver.execute_script("arguments[0].click();", input_element)
+                    time.sleep(0.5)
+                    self.driver.execute_script("arguments[0].value = '';", input_element)
+                    self.driver.execute_script("arguments[0].value = arguments[1];", input_element, prompt)
+
+                    # 입력 이벤트 트리거
+                    self.driver.execute_script("""
+                        var element = arguments[0];
+                        var event = new Event('input', { bubbles: true });
+                        element.dispatchEvent(event);
+                    """, input_element)
+
+                    print("✅ 프롬프트 입력 완료 (방법 2: JavaScript)")
+                    time.sleep(1)
+                    return True
+
+                except Exception as e2:
+                    print(f"❌ 방법 2도 실패: {e2}")
+                    print("💡 수동으로 프롬프트를 입력해주세요:")
+                    print(f"   프롬프트: {prompt}")
+                    input("   입력 완료 후 Enter를 누르세요...")
+                    return True
 
         except Exception as e:
             print(f"❌ 프롬프트 입력 실패: {e}")
-            return False
+            print("💡 수동으로 프롬프트를 입력해주세요:")
+            print(f"   프롬프트: {prompt}")
+            input("   입력 완료 후 Enter를 누르세요...")
+            return True
 
     def click_generate_button(self):
         """생성 버튼 클릭"""
@@ -132,11 +172,11 @@ class ImageFXDownloader:
             for selector in button_selectors:
                 try:
                     if selector.startswith("//"):
-                        button = WebDriverWait(self.driver, 3).until(
+                        button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
                     else:
-                        button = WebDriverWait(self.driver, 3).until(
+                        button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
                         )
                     print(f"✅ 생성 버튼 찾음 (선택자: {selector})")
@@ -150,13 +190,26 @@ class ImageFXDownloader:
                 input()
                 return True
 
-            button.click()
-            print("✅ 생성 버튼 클릭 완료")
+            # 버튼을 뷰포트에 스크롤
+            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", button)
+            time.sleep(0.5)
+
+            # 클릭 시도
+            try:
+                button.click()
+                print("✅ 생성 버튼 클릭 완료")
+            except Exception as click_error:
+                print(f"⚠️ 일반 클릭 실패, JavaScript로 재시도: {click_error}")
+                self.driver.execute_script("arguments[0].click();", button)
+                print("✅ 생성 버튼 클릭 완료 (JavaScript)")
+
             return True
 
         except Exception as e:
             print(f"❌ 생성 버튼 클릭 실패: {e}")
-            return False
+            print("💡 수동으로 생성 버튼을 클릭한 후 Enter를 누르세요...")
+            input()
+            return True
 
     def wait_for_images(self, timeout=120):
         """이미지 생성 완료 대기"""
