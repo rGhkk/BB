@@ -236,6 +236,14 @@ downloader.close()
 
 ## 업데이트 내역
 
+- **v1.2.0** (2026-01-05): JavaScript 우선 방식으로 전면 개선
+  - **JavaScript 우선 입력**: React/Vue 기반 SPA에 최적화된 입력 방식
+  - **다중 이벤트 트리거**: focus, input, change, keydown, keyup 등 모든 이벤트 발생
+  - **3단계 폴백**: JavaScript → Selenium Actions → 일반 send_keys
+  - **더 견고한 요소 탐지**: presence_of_element_located로 먼저 찾은 후 처리
+  - **자동 스크롤 개선**: smooth 대신 auto로 변경하여 더 빠른 스크롤
+  - **ActionChains 추가**: 마우스 이동 + 클릭으로 더 자연스러운 상호작용
+
 - **v1.1.0** (2026-01-05): element not interactable 오류 수정
   - 요소 클릭 가능 여부 확인 (element_to_be_clickable 사용)
   - 자동 스크롤로 요소를 뷰포트에 표시

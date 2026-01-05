@@ -66,150 +66,199 @@ class ImageFXDownloader:
 
     def enter_prompt(self, prompt):
         """프롬프트 입력"""
+        print(f"\n📝 프롬프트 입력: {prompt}")
+
+        # 프롬프트 입력창 찾기 (여러 선택자 시도)
+        selectors = [
+            "textarea",
+            "input[type='text']",
+            "[contenteditable='true']",
+            "div.input-box",
+            "#prompt-input"
+        ]
+
+        input_element = None
+        selected_selector = None
+
+        # 먼저 요소가 존재할 때까지 대기
+        for selector in selectors:
+            try:
+                input_element = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                selected_selector = selector
+                print(f"✅ 입력창 찾음 (선택자: {selector})")
+                break
+            except TimeoutException:
+                continue
+
+        if not input_element:
+            print("❌ 프롬프트 입력창을 찾을 수 없습니다.")
+            print("💡 수동으로 프롬프트를 입력하려면 아래 안내를 따르세요:")
+            print(f"   1. 브라우저에서 ImageFX 프롬프트 입력창을 찾으세요")
+            print(f"   2. 다음 프롬프트를 입력하세요: {prompt}")
+            print(f"   3. 생성 버튼을 클릭하세요")
+            input("   4. Enter를 눌러 계속하세요...")
+            return True
+
+        # 입력 시도 - JavaScript 우선 방식으로 변경
+        print("🔄 프롬프트 입력 시도 중...")
+
+        # 방법 1: JavaScript로 직접 입력 (가장 안정적)
         try:
-            print(f"\n📝 프롬프트 입력: {prompt}")
-
-            # 프롬프트 입력창 찾기 (여러 선택자 시도)
-            selectors = [
-                "textarea",
-                "input[type='text']",
-                "[contenteditable='true']",
-                "div.input-box",
-                "#prompt-input"
-            ]
-
-            input_element = None
-            selected_selector = None
-
-            # 먼저 클릭 가능한 요소 찾기
-            for selector in selectors:
-                try:
-                    input_element = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                    )
-                    selected_selector = selector
-                    print(f"✅ 입력창 찾음 (선택자: {selector})")
-                    break
-                except TimeoutException:
-                    continue
-
-            if not input_element:
-                print("❌ 프롬프트 입력창을 찾을 수 없습니다.")
-                print("💡 수동으로 프롬프트를 입력하려면 아래 안내를 따르세요:")
-                print(f"   1. 브라우저에서 ImageFX 프롬프트 입력창을 찾으세요")
-                print(f"   2. 다음 프롬프트를 입력하세요: {prompt}")
-                print(f"   3. 생성 버튼을 클릭하세요")
-                input("   4. Enter를 눌러 계속하세요...")
-                return True
-
             # 요소를 뷰포트에 스크롤
-            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", input_element)
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({behavior: 'auto', block: 'center'});",
+                input_element
+            )
             time.sleep(1)
 
-            # 입력 시도 (여러 방법 시도)
+            # JavaScript로 포커스 및 값 설정
+            self.driver.execute_script("""
+                var element = arguments[0];
+                var text = arguments[1];
+
+                // 포커스
+                element.focus();
+
+                // 값 설정
+                element.value = text;
+
+                // React/Vue 등을 위한 다양한 이벤트 트리거
+                element.dispatchEvent(new Event('focus', { bubbles: true }));
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+                element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+            """, input_element, prompt)
+
+            time.sleep(1)
+            print("✅ 프롬프트 입력 완료 (JavaScript)")
+            return True
+
+        except Exception as e1:
+            print(f"⚠️ JavaScript 입력 실패, Selenium으로 재시도: {e1}")
+
+            # 방법 2: Selenium Actions 사용
             try:
-                # 방법 1: 일반 클릭 및 입력
-                input_element.click()
+                from selenium.webdriver.common.action_chains import ActionChains
+
+                actions = ActionChains(self.driver)
+                actions.move_to_element(input_element).click().perform()
                 time.sleep(0.5)
+
+                # 기존 텍스트 삭제
                 input_element.clear()
+                time.sleep(0.3)
+
+                # 텍스트 입력
                 input_element.send_keys(prompt)
-                print("✅ 프롬프트 입력 완료 (방법 1: send_keys)")
                 time.sleep(1)
+
+                print("✅ 프롬프트 입력 완료 (Selenium Actions)")
                 return True
 
-            except Exception as e1:
-                print(f"⚠️ 방법 1 실패, JavaScript로 재시도: {e1}")
+            except Exception as e2:
+                print(f"⚠️ Selenium Actions도 실패, 일반 send_keys 시도: {e2}")
 
+                # 방법 3: 기본 send_keys
                 try:
-                    # 방법 2: JavaScript로 값 설정
-                    self.driver.execute_script("arguments[0].click();", input_element)
+                    input_element.click()
                     time.sleep(0.5)
-                    self.driver.execute_script("arguments[0].value = '';", input_element)
-                    self.driver.execute_script("arguments[0].value = arguments[1];", input_element, prompt)
-
-                    # 입력 이벤트 트리거
-                    self.driver.execute_script("""
-                        var element = arguments[0];
-                        var event = new Event('input', { bubbles: true });
-                        element.dispatchEvent(event);
-                    """, input_element)
-
-                    print("✅ 프롬프트 입력 완료 (방법 2: JavaScript)")
+                    input_element.clear()
+                    input_element.send_keys(prompt)
                     time.sleep(1)
+
+                    print("✅ 프롬프트 입력 완료 (send_keys)")
                     return True
 
-                except Exception as e2:
-                    print(f"❌ 방법 2도 실패: {e2}")
+                except Exception as e3:
+                    print(f"❌ 모든 자동 입력 방법 실패: {e3}")
                     print("💡 수동으로 프롬프트를 입력해주세요:")
                     print(f"   프롬프트: {prompt}")
                     input("   입력 완료 후 Enter를 누르세요...")
                     return True
 
-        except Exception as e:
-            print(f"❌ 프롬프트 입력 실패: {e}")
-            print("💡 수동으로 프롬프트를 입력해주세요:")
-            print(f"   프롬프트: {prompt}")
-            input("   입력 완료 후 Enter를 누르세요...")
-            return True
-
     def click_generate_button(self):
         """생성 버튼 클릭"""
-        try:
-            print("\n🔘 생성 버튼 찾는 중...")
+        print("\n🔘 생성 버튼 찾는 중...")
 
-            # 생성 버튼 선택자들
-            button_selectors = [
-                "button[aria-label*='Generate']",
-                "button[aria-label*='Create']",
-                "button:has-text('Generate')",
-                "button:has-text('Create')",
-                "button.generate-button",
-                "//button[contains(text(), 'Generate')]",
-                "//button[contains(text(), 'Create')]",
-            ]
+        # 생성 버튼 선택자들
+        button_selectors = [
+            "button[aria-label*='Generate']",
+            "button[aria-label*='Create']",
+            "//button[contains(text(), 'Generate')]",
+            "//button[contains(text(), 'Create')]",
+            "button.generate-button",
+            "button[type='submit']"
+        ]
 
-            button = None
-            for selector in button_selectors:
-                try:
-                    if selector.startswith("//"):
-                        button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                    else:
-                        button = WebDriverWait(self.driver, 5).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                        )
-                    print(f"✅ 생성 버튼 찾음 (선택자: {selector})")
-                    break
-                except TimeoutException:
-                    continue
-
-            if not button:
-                print("❌ 생성 버튼을 찾을 수 없습니다.")
-                print("💡 수동으로 생성 버튼을 클릭한 후 Enter를 누르세요...")
-                input()
-                return True
-
-            # 버튼을 뷰포트에 스크롤
-            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", button)
-            time.sleep(0.5)
-
-            # 클릭 시도
+        button = None
+        for selector in button_selectors:
             try:
-                button.click()
-                print("✅ 생성 버튼 클릭 완료")
-            except Exception as click_error:
-                print(f"⚠️ 일반 클릭 실패, JavaScript로 재시도: {click_error}")
-                self.driver.execute_script("arguments[0].click();", button)
-                print("✅ 생성 버튼 클릭 완료 (JavaScript)")
+                if selector.startswith("//"):
+                    button = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                else:
+                    button = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                print(f"✅ 생성 버튼 찾음 (선택자: {selector})")
+                break
+            except TimeoutException:
+                continue
 
-            return True
-
-        except Exception as e:
-            print(f"❌ 생성 버튼 클릭 실패: {e}")
+        if not button:
+            print("❌ 생성 버튼을 찾을 수 없습니다.")
             print("💡 수동으로 생성 버튼을 클릭한 후 Enter를 누르세요...")
             input()
             return True
+
+        # JavaScript 우선 방식으로 클릭
+        print("🔄 생성 버튼 클릭 시도 중...")
+
+        # 방법 1: JavaScript 클릭 (가장 안정적)
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({behavior: 'auto', block: 'center'});",
+                button
+            )
+            time.sleep(0.5)
+
+            self.driver.execute_script("arguments[0].click();", button)
+            time.sleep(1)
+            print("✅ 생성 버튼 클릭 완료 (JavaScript)")
+            return True
+
+        except Exception as e1:
+            print(f"⚠️ JavaScript 클릭 실패, Actions로 재시도: {e1}")
+
+            # 방법 2: Selenium Actions
+            try:
+                from selenium.webdriver.common.action_chains import ActionChains
+
+                actions = ActionChains(self.driver)
+                actions.move_to_element(button).click().perform()
+                time.sleep(1)
+                print("✅ 생성 버튼 클릭 완료 (Actions)")
+                return True
+
+            except Exception as e2:
+                print(f"⚠️ Actions 클릭 실패, 일반 클릭 시도: {e2}")
+
+                # 방법 3: 일반 클릭
+                try:
+                    button.click()
+                    time.sleep(1)
+                    print("✅ 생성 버튼 클릭 완료 (일반 클릭)")
+                    return True
+
+                except Exception as e3:
+                    print(f"❌ 모든 클릭 방법 실패: {e3}")
+                    print("💡 수동으로 생성 버튼을 클릭한 후 Enter를 누르세요...")
+                    input()
+                    return True
 
     def wait_for_images(self, timeout=120):
         """이미지 생성 완료 대기"""
