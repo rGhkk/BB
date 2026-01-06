@@ -6,12 +6,15 @@ ImageFX Selenium Automation Script
 import os
 import time
 import json
+import base64
+import hashlib
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import requests
 
@@ -69,27 +72,15 @@ class ImageFXDownloader:
         try:
             print(f"\n📝 프롬프트 입력: {prompt}")
 
-            # 프롬프트 입력창 찾기 (여러 선택자 시도)
-            selectors = [
-                "textarea",
-                "input[type='text']",
-                "[contenteditable='true']",
-                "div.input-box",
-                "#prompt-input"
-            ]
-
+            # contenteditable div 찾기 (ImageFX는 div를 사용)
             input_element = None
-            for selector in selectors:
-                try:
-                    input_element = WebDriverWait(self.driver, 5).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    print(f"✅ 입력창 찾음 (선택자: {selector})")
-                    break
-                except TimeoutException:
-                    continue
-
-            if not input_element:
+            try:
+                # contenteditable div 찾기
+                input_element = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[contenteditable='true']"))
+                )
+                print(f"✅ 입력창 찾음 (contenteditable div)")
+            except TimeoutException:
                 print("❌ 프롬프트 입력창을 찾을 수 없습니다.")
                 print("💡 수동으로 프롬프트를 입력하려면 아래 안내를 따르세요:")
                 print(f"   1. 브라우저에서 ImageFX 프롬프트 입력창을 찾으세요")
@@ -98,123 +89,281 @@ class ImageFXDownloader:
                 input("   4. Enter를 눌러 계속하세요...")
                 return True
 
-            # 입력창 클릭 및 프롬프트 입력
+            # 스크롤하여 요소를 화면에 표시
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", input_element)
+            time.sleep(0.5)
+
+            # 포커스 주기
+            self.driver.execute_script("arguments[0].focus();", input_element)
+            time.sleep(0.3)
+
+            # 기존 내용 전체 선택 후 삭제
+            input_element.click()
+            time.sleep(0.3)
+
+            # Ctrl+A로 전체 선택
+            from selenium.webdriver.common.keys import Keys
+            input_element.send_keys(Keys.CONTROL + "a")
+            time.sleep(0.2)
+
+            # 삭제
+            input_element.send_keys(Keys.DELETE)
+            time.sleep(0.5)
+
+            # 프롬프트 입력 (send_keys 사용 - 가장 확실한 방법)
+            input_element.send_keys(prompt)
+            time.sleep(2)
+
+            # 입력 완료를 위한 클릭 (focus 유지)
             input_element.click()
             time.sleep(0.5)
-            input_element.clear()
-            input_element.send_keys(prompt)
-            time.sleep(1)
 
-            print("✅ 프롬프트 입력 완료")
-            return True
+            # 입력 확인
+            current_text = self.driver.execute_script("return arguments[0].textContent;", input_element)
+            if prompt in current_text:
+                print("✅ 프롬프트 입력 완료")
+                return True
+            else:
+                print(f"⚠️ 입력 확인 실패. 예상: '{prompt[:50]}...', 실제: '{current_text[:50]}...'")
+                # 재시도 - send_keys 사용
+                print("⚠️ send_keys로 재시도...")
+                input_element.click()
+                time.sleep(0.5)
+                input_element.send_keys(prompt)
+                time.sleep(1)
+                print("✅ 프롬프트 입력 완료 (재시도)")
+                return True
 
         except Exception as e:
             print(f"❌ 프롬프트 입력 실패: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def click_generate_button(self):
-        """생성 버튼 클릭"""
+        """생성 버튼 클릭 ('상식 여행' 버튼)"""
         try:
             print("\n🔘 생성 버튼 찾는 중...")
 
-            # 생성 버튼 선택자들
-            button_selectors = [
-                "button[aria-label*='Generate']",
-                "button[aria-label*='Create']",
-                "button:has-text('Generate')",
-                "button:has-text('Create')",
-                "button.generate-button",
-                "//button[contains(text(), 'Generate')]",
-                "//button[contains(text(), 'Create')]",
+            # XPath 선택자 (한국어 "상식 여행" 텍스트 기반)
+            xpath_selectors = [
+                # "상식 여행" 텍스트 포함
+                "//button[contains(., '상식 여행')]",
+                "//button[contains(., '상식')]",
+                # casino 아이콘이 있는 버튼
+                "//button[.//i[contains(text(), 'casino')]]",
+                # type=submit인 버튼 (마지막 옵션)
+                "//button[@type='submit' and contains(., '상식')]",
+            ]
+
+            # CSS 선택자
+            css_selectors = [
+                # 분석된 클래스명
+                "button.gdArnN",
+                "button.fzQimn",
             ]
 
             button = None
-            for selector in button_selectors:
+
+            # XPath 선택자 시도 (한국어 텍스트가 더 정확하므로 먼저 시도)
+            for selector in xpath_selectors:
                 try:
-                    if selector.startswith("//"):
-                        button = WebDriverWait(self.driver, 3).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                    else:
-                        button = WebDriverWait(self.driver, 3).until(
-                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                        )
-                    print(f"✅ 생성 버튼 찾음 (선택자: {selector})")
+                    button = WebDriverWait(self.driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                    print(f"✅ 생성 버튼 찾음 ('상식 여행' 버튼)")
                     break
                 except TimeoutException:
                     continue
+                except Exception:
+                    continue
+
+            # CSS 선택자 시도
+            if not button:
+                for selector in css_selectors:
+                    try:
+                        button = WebDriverWait(self.driver, 3).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        # 텍스트 확인
+                        btn_text = button.text
+                        if '상식' in btn_text:
+                            print(f"✅ 생성 버튼 찾음 ('상식 여행' 버튼)")
+                            break
+                    except TimeoutException:
+                        continue
+                    except Exception:
+                        continue
 
             if not button:
                 print("❌ 생성 버튼을 찾을 수 없습니다.")
-                print("💡 수동으로 생성 버튼을 클릭한 후 Enter를 누르세요...")
+                print("💡 수동으로 '상식 여행' 버튼을 클릭한 후 Enter를 누르세요...")
                 input()
                 return True
 
-            button.click()
-            print("✅ 생성 버튼 클릭 완료")
-            return True
+            # 버튼 클릭 (여러 방법 시도)
+            try:
+                # 스크롤하여 버튼을 화면에 표시
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+                time.sleep(0.5)
+
+                # JavaScript로 클릭 시도
+                try:
+                    self.driver.execute_script("arguments[0].click();", button)
+                    print("✅ 생성 버튼 클릭 완료")
+                except:
+                    button.click()
+                    print("✅ 생성 버튼 클릭 완료")
+
+                return True
+            except Exception as e:
+                print(f"⚠️ 버튼 클릭 실패, 재시도: {e}")
+                button.click()
+                print("✅ 생성 버튼 클릭 완료")
+                return True
 
         except Exception as e:
             print(f"❌ 생성 버튼 클릭 실패: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
-    def wait_for_images(self, timeout=120):
-        """이미지 생성 완료 대기"""
+    def capture_current_image_hashes(self):
+        """현재 페이지의 이미지 해시 저장 (생성 버튼 클릭 전에 호출)"""
+        hashes = set()
+        try:
+            images = self.driver.find_elements(By.TAG_NAME, "img")
+            for img in images:
+                try:
+                    src = img.get_attribute("src")
+                    if src and src.startswith("data:") and len(src) > 50000:
+                        width = img.size.get('width', 0)
+                        if width > 100:
+                            img_hash = hashlib.md5(src[:1000].encode()).hexdigest()
+                            hashes.add(img_hash)
+                except:
+                    continue
+
+            if hashes:
+                print(f"   📋 현재 이미지 {len(hashes)}개 감지됨 (중복 방지용)")
+        except Exception as e:
+            print(f"   ⚠️ 이미지 해시 캡처 실패: {e}")
+
+        return hashes
+
+    def wait_for_images(self, timeout=30, initial_hashes=None):
+        """이미지 생성 완료 대기 (변화 감지 방식)"""
         try:
             print(f"\n⏳ 이미지 생성 대기 중... (최대 {timeout}초)")
             start_time = time.time()
+            previous_count = 0
+            stable_count = 0
+            target_images = 4  # ImageFX는 4개 생성
+            last_print_time = 0
+            check_interval = 5  # 5초마다 확인
+
+            # initial_hashes가 제공되면 중복 체크
+            if initial_hashes is None:
+                initial_hashes = set()
+
+            if initial_hashes:
+                print(f"   📋 이전 이미지 {len(initial_hashes)}개 제외, 새 이미지만 대기 중...")
 
             while time.time() - start_time < timeout:
                 # 이미지 요소 찾기 시도
                 images = self.driver.find_elements(By.TAG_NAME, "img")
 
-                # src가 있는 실제 이미지 필터링
-                valid_images = [
-                    img for img in images
-                    if img.get_attribute("src") and
-                    not img.get_attribute("src").startswith("data:") and
-                    "icon" not in img.get_attribute("src").lower()
-                ]
+                # 생성된 이미지 필터링 (data: URL만 사용 - 프로필 이미지 제외)
+                valid_images = []
+                current_hashes = set()
 
-                if len(valid_images) >= 4:
-                    print(f"✅ {len(valid_images)}개 이미지 생성 완료!")
-                    return True
+                for img in images:
+                    try:
+                        src = img.get_attribute("src")
+                        if not src:
+                            continue
 
-                # 진행 상황 표시
+                        # ImageFX 생성 이미지는 data: URL만 사용
+                        if src.startswith("data:"):
+                            if len(src) > 50000:  # 50KB 이상 (실제 이미지)
+                                # 썸네일 제외 (너비 100 이상만)
+                                width = img.size.get('width', 0)
+                                if width > 100:
+                                    img_hash = hashlib.md5(src[:1000].encode()).hexdigest()
+                                    current_hashes.add(img_hash)
+
+                                    # 새 이미지인지 확인
+                                    if not initial_hashes or img_hash not in initial_hashes:
+                                        valid_images.append(img)
+                    except:
+                        continue
+
+                current_count = len(valid_images)
+
+                # 이미지 개수가 3회 연속 동일하면 생성 완료로 판단
+                if current_count == previous_count:
+                    stable_count += 1
+                else:
+                    stable_count = 0
+
+                previous_count = current_count
+
+                # 3회 연속 동일 (15초) 또는 4개 도달 시 완료
+                if (stable_count >= 3 and current_count > 0) or current_count >= target_images:
+                    if current_count > 0:
+                        print(f"✅ {current_count}개 새 이미지 생성 완료!")
+                        return True
+
+                # 진행 상황 표시 (5초마다)
                 elapsed = int(time.time() - start_time)
-                if elapsed % 10 == 0 and elapsed > 0:
-                    print(f"   {elapsed}초 경과... (발견된 이미지: {len(valid_images)}개)")
+                if elapsed - last_print_time >= check_interval and elapsed > 0:
+                    print(f"   {elapsed}초 경과... (새 이미지: {current_count}개, 안정: {stable_count}/3)")
+                    last_print_time = elapsed
 
-                time.sleep(2)
+                time.sleep(check_interval)
 
-            print(f"⚠️ 타임아웃: {timeout}초 내에 4개의 이미지가 생성되지 않았습니다.")
-            return False
+            # 타임아웃: 이미지 개수에 따라 처리
+            if len(valid_images) > 0:
+                print(f"⚠️ 타임아웃 ({timeout}초) - {len(valid_images)}개 이미지로 계속 진행합니다.")
+                return True
+            else:
+                print(f"⚠️ 타임아웃 ({timeout}초) - 이미지 생성 실패. 다음 프롬프트로 진행합니다.")
+                return False
 
         except Exception as e:
             print(f"❌ 이미지 대기 중 오류: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def download_images(self, prompt):
-        """생성된 이미지 4개 다운로드"""
+        """생성된 이미지 4개 다운로드 (hover로 다운로드 버튼 활성화)"""
         try:
             print("\n💾 이미지 다운로드 시작...")
 
             # 모든 이미지 요소 찾기
             images = self.driver.find_elements(By.TAG_NAME, "img")
 
-            # 유효한 이미지 URL 필터링
-            image_urls = []
+            # 유효한 이미지 필터링 (data: URL만 - 프로필 이미지 제외)
+            valid_images = []
             for img in images:
-                src = img.get_attribute("src")
-                if src and not src.startswith("data:") and "icon" not in src.lower():
-                    image_urls.append(src)
+                try:
+                    src = img.get_attribute("src")
+                    if not src:
+                        continue
 
-            print(f"📸 발견된 이미지: {len(image_urls)}개")
+                    # ImageFX 생성 이미지는 data: URL만 사용
+                    if src.startswith("data:"):
+                        if len(src) > 50000:  # 50KB 이상 (실제 이미지)
+                            width = img.size.get('width', 0)
+                            if width > 100:  # 썸네일 제외
+                                valid_images.append((img, src))
+                except:
+                    continue
 
-            # 최대 4개만 다운로드
-            download_urls = image_urls[:4]
+            print(f"📸 발견된 이미지: {len(valid_images)}개")
 
-            if not download_urls:
+            if not valid_images:
                 print("❌ 다운로드할 이미지를 찾을 수 없습니다.")
                 return []
 
@@ -225,35 +374,54 @@ class ImageFXDownloader:
             os.makedirs(session_dir, exist_ok=True)
 
             downloaded_files = []
+            actions = ActionChains(self.driver)
 
-            for idx, url in enumerate(download_urls, 1):
+            # 최대 4개 이미지 다운로드
+            for idx, (img_element, img_url) in enumerate(valid_images[:4], 1):
                 try:
-                    print(f"   [{idx}/4] 다운로드 중...")
+                    print(f"\n   [{idx}/4] 이미지 다운로드 중...")
 
-                    # 이미지 다운로드
-                    response = requests.get(url, timeout=30)
-                    response.raise_for_status()
+                    # 이미지 요소로 스크롤
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", img_element)
+                    time.sleep(0.5)
+
+                    # 이미지 데이터 직접 저장 (버튼 클릭 불필요 - data: URL 사용)
+                    print(f"   ⏳ 이미지 데이터 저장 중...")
 
                     # 파일명 생성
-                    filename = f"image_{idx}.png"
+                    filename = f"image_{idx}.jpg"  # ImageFX는 jpg 사용
                     filepath = os.path.join(session_dir, filename)
 
-                    # 파일 저장
-                    with open(filepath, 'wb') as f:
-                        f.write(response.content)
+                    # data: URL인 경우 base64 디코딩
+                    if img_url.startswith("data:"):
+                        # data:image/jpg;base64,... 형식에서 base64 부분 추출
+                        base64_data = img_url.split(',', 1)[1]
+                        image_data = base64.b64decode(base64_data)
+
+                        with open(filepath, 'wb') as f:
+                            f.write(image_data)
+                    else:
+                        # 일반 URL의 경우
+                        response = requests.get(img_url, timeout=30)
+                        response.raise_for_status()
+
+                        with open(filepath, 'wb') as f:
+                            f.write(response.content)
 
                     downloaded_files.append(filepath)
                     print(f"   ✅ 저장 완료: {filepath}")
 
                 except Exception as e:
                     print(f"   ❌ 이미지 {idx} 다운로드 실패: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             # 메타데이터 저장
             metadata = {
                 "prompt": prompt,
                 "timestamp": timestamp,
                 "downloaded_count": len(downloaded_files),
-                "image_urls": download_urls
+                "image_urls": [url for _, url in valid_images[:4]]
             }
 
             metadata_path = os.path.join(session_dir, "metadata.json")
@@ -267,6 +435,8 @@ class ImageFXDownloader:
 
         except Exception as e:
             print(f"❌ 이미지 다운로드 실패: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def process_prompt(self, prompt):
@@ -279,29 +449,27 @@ class ImageFXDownloader:
         if not self.enter_prompt(prompt):
             return False
 
-        # 2. 생성 버튼 클릭
+        # 2. 생성 버튼 클릭 전에 현재 이미지 해시 캡처 (중복 방지)
+        initial_hashes = self.capture_current_image_hashes()
+
+        # 3. 생성 버튼 클릭
         if not self.click_generate_button():
             return False
 
-        # 3. 이미지 생성 대기
-        if not self.wait_for_images():
-            print("⚠️ 이미지 생성이 완료되지 않았을 수 있습니다.")
-            print("💡 계속 진행하려면 Enter를 누르세요 (취소하려면 Ctrl+C)...")
-            try:
-                input()
-            except KeyboardInterrupt:
-                print("\n❌ 사용자가 취소했습니다.")
-                return False
+        # 4. 이미지 생성 대기 (이전 이미지 해시 전달)
+        self.wait_for_images(initial_hashes=initial_hashes)
+        # 이미지 생성 실패해도 계속 진행 (0개일 수도 있음)
 
-        # 4. 이미지 다운로드
+        # 5. 이미지 다운로드
         downloaded_files = self.download_images(prompt)
 
         if downloaded_files:
             print(f"\n✅ 프롬프트 처리 완료: {len(downloaded_files)}개 이미지 다운로드")
-            return True
         else:
-            print("\n⚠️ 이미지 다운로드에 실패했습니다.")
-            return False
+            print("\n⚠️ 이미지가 생성되지 않았습니다. 다음 프롬프트로 진행합니다.")
+
+        # 성공/실패 상관없이 항상 True 반환 (계속 진행)
+        return True
 
     def close(self):
         """브라우저 연결 종료 (브라우저는 닫지 않음)"""
